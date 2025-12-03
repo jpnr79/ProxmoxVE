@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
 # Copyright (c) 2021-2025 community-scripts ORG
-# Author: Nícolas Pastorello (opastorello)
+# Author: Pedro Rocha
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://www.glpi-project.org/
 
+# Import Functions und Setup
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
 verb_ip6
@@ -13,18 +14,20 @@ setting_up_container
 network_check
 update_os
 
+# Installing Dependencies
 msg_info "Installing Dependencies"
 $STD apt install -y \
   git \
   apache2 \
-  php8.4-{apcu,cli,common,curl,gd,ldap,mysql,xmlrpc,xml,mbstring,bcmath,intl,zip,redis,bz2,soap} \
+  php8.4-{apcu,dom,fileinfo,common,cli,filter,libxml,simplexml,tokenizer,xmlwriter,curl,gd,intl,mysql,session,zlib,bcmath,mbstring,openssl,bz2,Phar,zip,exif,ldap,opcache,ctype,iconv,sodium} \
   php-cas \
-  libapache2-mod-php
+  libapache2-mod-php \
+  php-soap
 msg_ok "Installed Dependencies"
 
+# Template: MariaDB Database
 setup_mariadb
-
-msg_info "Setting up database"
+msg_info "Setting up Database"
 DB_NAME=glpi_db
 DB_USER=glpi
 DB_PASS=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)
@@ -32,23 +35,25 @@ mariadb-tzinfo-to-sql /usr/share/zoneinfo | mariadb mysql
 $STD mariadb -u root -e "CREATE DATABASE $DB_NAME;"
 $STD mariadb -u root -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
 $STD mariadb -u root -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
-$STD mariadb -u root -e "GRANT SELECT ON \`mysql\`.\`time_zone_name\` TO '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
+$STD mariadb -u root -e "GRANT SELECT ON \`mysql\`.\`time_zone_name\` TO '$DB_USER'@'localhost';"
+$STD mariadb -u root -e "FLUSH PRIVILEGES;"
 {
-  echo "GLPI Database Credentials"
+  echo "${APPLICATION} Credentials"
   echo "Database: $DB_NAME"
   echo "Username: $DB_USER"
   echo "Password: $DB_PASS"
-} >>~/glpi_db.creds
+} >>~/$APP_NAME.creds
 msg_ok "Set up database"
 
-msg_info "Installing GLPi"
+# Setup App
+msg_info "Setup ${APPLICATION}"
 cd /opt
 RELEASE=$(curl -fsSL https://api.github.com/repos/glpi-project/glpi/releases/latest | grep '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
 curl -fsSL "https://github.com/glpi-project/glpi/releases/download/${RELEASE}/glpi-${RELEASE}.tgz" -o $(basename "https://github.com/glpi-project/glpi/releases/download/${RELEASE}/glpi-${RELEASE}.tgz")
 $STD tar -xzvf glpi-${RELEASE}.tgz
 cd /opt/glpi
 echo "${RELEASE}" >/opt/${APPLICATION}_version.txt
-msg_ok "Installed GLPi"
+msg_ok "Setup ${APPLICATION}"
 
 msg_info "Setting Downstream file"
 cat <<EOF >/opt/glpi/inc/downstream.php
@@ -67,9 +72,10 @@ cat <<EOF >/etc/glpi/local_define.php
 <?php
 define('GLPI_VAR_DIR', '/var/lib/glpi');
 define('GLPI_DOC_DIR', GLPI_VAR_DIR);
+define('GLPI_CACHE_DIR', GLPI_VAR_DIR . '/_cache');
 define('GLPI_CRON_DIR', GLPI_VAR_DIR . '/_cron');
-define('GLPI_DUMP_DIR', GLPI_VAR_DIR . '/_dumps');
 define('GLPI_GRAPH_DIR', GLPI_VAR_DIR . '/_graphs');
+define('GLPI_LOCAL_I18N_DIR', GLPI_VAR_DIR . '/_locales');
 define('GLPI_LOCK_DIR', GLPI_VAR_DIR . '/_lock');
 define('GLPI_PICTURE_DIR', GLPI_VAR_DIR . '/_pictures');
 define('GLPI_PLUGIN_DOC_DIR', GLPI_VAR_DIR . '/_plugins');
@@ -77,8 +83,11 @@ define('GLPI_RSS_DIR', GLPI_VAR_DIR . '/_rss');
 define('GLPI_SESSION_DIR', GLPI_VAR_DIR . '/_sessions');
 define('GLPI_TMP_DIR', GLPI_VAR_DIR . '/_tmp');
 define('GLPI_UPLOAD_DIR', GLPI_VAR_DIR . '/_uploads');
-define('GLPI_CACHE_DIR', GLPI_VAR_DIR . '/_cache');
+define('GLPI_INVENTORY_DIR', GLPI_VAR_DIR . '/_inventories');
+define('GLPI_THEMES_DIR', GLPI_VAR_DIR . '/_themes');
 define('GLPI_LOG_DIR', '/var/log/glpi');
+define('GLPI_DUMP_DIR', GLPI_VAR_DIR . '/_dumps');
+define('GLPI_GRAPH_DIR', GLPI_VAR_DIR . '/_graphs');
 EOF
 msg_ok "Configured Downstream file"
 
@@ -149,6 +158,7 @@ sed -i 's/^max_execution_time = .*/max_execution_time = 60/' $PHP_INI
 sed -i 's/^max_input_vars = .*/max_input_vars = 5000/' $PHP_INI
 sed -i 's/^memory_limit = .*/memory_limit = 256M/' $PHP_INI
 sed -i 's/^;\?\s*session.cookie_httponly\s*=.*/session.cookie_httponly = On/' $PHP_INI
+sed -i 's/^;\?\s*date.timezone = Europe/Lisbon/' $PHP_INI
 systemctl restart apache2
 msg_ok "Update PHP Params"
 
