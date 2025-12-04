@@ -6,10 +6,10 @@ IFS=$'\n\t'
 #### VARIÁVEIS (edite aqui)
 #### -------------------------
 CTID=210
-TEMPLATE="/var/lib/vz/template/cache/debian-12-standard_12.0-1_amd64.tar.zst"
+TEMPLATE="/var/lib/vz/template/cache/debian-12-standard_12.12-1_amd64.tar.zst" #Conforme CT baixado no gui
 HOSTNAME="glpi-np"
 PASSWORD="TroqueSenhaRootLXC!"
-DISK="20G"
+DISK="20" #GB
 RAM="4096"         # MB
 SWAP="1024"
 CPUS="2"
