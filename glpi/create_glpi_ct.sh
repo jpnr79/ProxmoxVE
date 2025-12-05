@@ -37,14 +37,16 @@ pct create $CTID $TEMPLATE \
   --rootfs $STORAGE:$DISK \
   --arch amd64 \
   --ostype debian \
-  --root-password "$CT_ROOT_PASS" \
   --unprivileged 0 \
   --features nesting=1
 
 log "Configurando rede..."
 pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 pct set $CTID -onboot 1
+# ✅ SENHA ROOT DEFINIDA AQUI (método correto)
+pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
 
+log "🔑 Senha root definida: $CT_ROOT_PASS"
 log "Iniciando CT..."
 pct start $CTID
 sleep 30
