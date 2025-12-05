@@ -6,6 +6,7 @@ CTID=199
 HOSTNAME="SRV-GLPI"
 IP="192.168.0.199/24"
 GATEWAY="192.168.0.1"
+DNS=""
 RAM=4096
 CPUS=2
 DISK=40
@@ -33,6 +34,7 @@ pct create $CTID $TEMPLATE \
   --cores $CPUS \
   --rootfs $STORAGE:$DISK \
   --net0 name=eth0,bridge=$NETBRIDGE,ipaddr=$IP,gw=$GATEWAY \
+  --dns $DNS \
   --arch amd64 \
   --ostype debian \
   --unprivileged 1 \
