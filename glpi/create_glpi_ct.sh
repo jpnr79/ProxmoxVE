@@ -11,7 +11,7 @@ RAM=4096
 CPUS=2
 DISK=40
 TEMPLATE="local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
-STORAGE="local-lvm"
+STORAGE="local-lvm" # ✅ Use local-lvm ou local-zfs (NÃO local)
 NETBRIDGE="vmbr0"
 GLPI_DB_PASS="SenhaFort3!"
 
@@ -38,8 +38,8 @@ pct create $CTID $TEMPLATE \
   --ostype debian \
   --unprivileged 1 \
   --features nesting=1 \
-  --startup start=1,order=1,up=60s
-
+  
+pct set $CTID --onboot 1
 pct start $CTID
 sleep 30
 
@@ -66,12 +66,12 @@ cat > /tmp/glpi_install.sh <<'EOF'
 #!/usr/bin/env bash
 set -e
 
-GLPI_VERSION="11.0.0"
+GLPI_VERSION="11.0.4"
 GLPI_DB_NAME="glpi"
 GLPI_DB_USER="glpi"
 GLPI_DB_PASS="SenhaFort3!"
 GLPI_DIR="/var/www/glpi"
-PHP_VER="8.3"
+PHP_VER="8.4"
 TZ="Europe/Lisbon"
 
 log() { echo "[GLPI-CT] $*"; }
