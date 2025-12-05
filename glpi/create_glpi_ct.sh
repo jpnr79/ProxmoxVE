@@ -26,6 +26,7 @@ if pct status $CTID >/dev/null 2>&1; then
   exit 1
 fi
 
+# ✅ CORRETO: pct create SEM rede
 log "Criando CT $CTID com 3 bind mounts persistentes..."
 pct create $CTID $TEMPLATE \
   --hostname $HOSTNAME \
@@ -36,10 +37,11 @@ pct create $CTID $TEMPLATE \
   --ostype debian \
   --unprivileged 1 \
   --features nesting=1
-  
-# ✅ CONFIGURAR REDE COM pct set (sintaxe 100% correta)
+
+# ✅ DEPOIS: configura rede com pct set (sintaxe 100% correta)
 log "Configurando rede..."
-pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY,type=veth"
+pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE"
+pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 
 # ✅ STARTUP COM pct set
 pct set $CTID -onboot 1
