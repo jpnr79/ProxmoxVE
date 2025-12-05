@@ -92,11 +92,25 @@ fi
 apt update && apt -y full-upgrade
 apt -y install sudo curl wget gnupg2 ca-certificates lsb-release apt-transport-https software-properties-common
 
-# ✅ REPOSITÓRIO PHP 8.4 (Ondřej Surý)
 log "Adicionando repositório PHP 8.4..."
-curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/php.gpg
-echo "deb [signed-by=/usr/share/keyrings/php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list
+apt -y install software-properties-common lsb-release ca-certificates apt-transport-https gnupg2
+
+# ✅ CHAVE GPG CORRETA (2025)
+curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/php-archive-keyring.gpg
+
+# ✅ REPO CORRETO (signed-by)
+echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
+
+# ✅ UPDATE OBRIGATÓRIO
 apt update
+
+# ✅ TESTA PHP 8.4 (debug)
+apt-cache policy php8.4-fpm || log "ERRO: PHP 8.4 não encontrado!"
+
+# ✅ PHP 8.4 + EXTENSÕES
+apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
+  php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
+  php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
 
 apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
 svc enable apache2 mariadb redis-server
