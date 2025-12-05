@@ -44,13 +44,12 @@ log "Configurando rede..."
 pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 pct set $CTID -onboot 1
 
-
-
 log "Iniciando CT..."
 pct start $CTID
 sleep 15
 # ✅ SENHA ROOT DEFINIDA AQUI (método correto)
 pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
+
 log "🔑 Senha root definida: $CT_ROOT_PASS"
 log "Configurando DNS..."
 pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
@@ -67,11 +66,9 @@ fi
 # CONFIGURAÇÃO DE DIRETÓRIOS PERSISTENTES
 # ===========================================
 mkdir -p "$PLUGINS_MP" "$MARKETPLACE_MP" "$FILES_MP" "/var/lib/vz/dump/glpi-backups-${CTID}"
-
 pct set $CTID -mp0 "$PLUGINS_MP,mp=/var/www/glpi/plugins"
 pct set $CTID -mp1 "$MARKETPLACE_MP,mp=/var/www/glpi/marketplace"  
 pct set $CTID -mp2 "$FILES_MP,mp=/var/www/glpi/files"
-
 log "✅ Bind mounts criados:"
 log "- Plugins:     $PLUGINS_MP → /var/www/glpi/plugins"
 log "- Marketplace: $MARKETPLACE_MP → /var/www/glpi/marketplace"
@@ -100,16 +97,64 @@ svc() {
   fi
 }
 
-log "Atualizando sistema e pacotes base..."
-apt update && apt -y full-upgrade
-apt -y install sudo curl wget gnupg2 ca-certificates lsb-release apt-transport-https software-properties-common
+# ===========================================
+# ✅ REPOSITÓRIO SURY PHP CORRIGIDO (2025)
+# ===========================================
+log "Configurando repositório Sury PHP (moderno 2025)..."
 
-log "Configurando repositório PHP 8.4..."
-curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/php-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://packages.sury.org/php/ \$(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
+# Pacotes necessários
+apt -y install lsb-release ca-certificates apt-transport-https gnupg2 software-properties-common
 
+# ✅ CHAVE GPG CORRETA (keyrings)
+curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/deb.sury.org-php.gpg
+
+# ✅ REPO MODERNO (signed-by)
+echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
+
+# ✅ UPDATE OBRIGATÓRIO
 apt update
-apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
+
+# ===========================================
+# ✅ DETECTA MELHOR VERSÃO PHP DISPONÍVEL
+# ===========================================
+if apt-cache policy php8.4-fpm | grep -q "Candidate:.*8.4"; then
+  log "✅ PHP 8.4 disponível!"
+  PHP_VER="8.4"
+  apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
+    php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
+    php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
+elif apt-cache policy php8.3-fpm | grep -q "Candidate:.*8.3"; then
+  log "✅ PHP 8.3 disponível (fallback)"
+  PHP_VER="8.3"
+  apt -y install php8.3-fpm php8.3-mysql php8.3-curl php8.3-gd php8.3-intl \
+    php8.3-mbstring php8.3-xml php8.3-zip php8.3-apcu php8.3-ldap \
+    php8.3-imap php8.3-bcmath php8.3-soap php8.3-redis
+elif apt-cache policy php8.2-fpm | grep -q "Candidate:.*8.2"; then
+  log "✅ PHP 8.2 disponível (fallback)"
+  PHP_VER="8.2"
+  apt -y install php8.2-fpm php8.2-mysql php8.2-curl php8.2-gd php8.2-intl \
+    php8.2-mbstring php8.2-xml php8.2-zip php8.2-apcu php8.2-ldap \
+    php8.2-imap php8.2-bcmath php8.2-soap php8.2-redis
+else
+  log "ERRO: Nenhuma versão PHP 8.x encontrada!"
+  exit 1
+fi
+
+log "✅ PHP ${PHP_VER} instalado com sucesso!"
+
+# ===========================================
+# CONFIG PHP.INI (agora funciona)
+# ===========================================
+PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
+sed -i 's/memory_limit.*/memory_limit = 512M/' "$PHP_INI"
+sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' "$PHP_INI"
+sed -i 's/post_max_size.*/post_max_size = 128M/' "$PHP_INI"
+sed -i 's/max_execution_time.*/max_execution_time = 300/' "$PHP_INI"
+sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" "$PHP_INI"
+
+svc restart "php${PHP_VER}-fpm"
+
+log "Verificando PHP: $(php -v | head -1)"apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
 
 
 svc enable apache2 mariadb redis-server
