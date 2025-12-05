@@ -43,14 +43,14 @@ pct create $CTID $TEMPLATE \
 log "Configurando rede..."
 pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 pct set $CTID -onboot 1
-# ✅ SENHA ROOT DEFINIDA AQUI (método correto)
-pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
+
 
 log "🔑 Senha root definida: $CT_ROOT_PASS"
 log "Iniciando CT..."
 pct start $CTID
 sleep 30
-
+# ✅ SENHA ROOT DEFINIDA AQUI (método correto)
+pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
 log "Configurando DNS..."
 pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
 pct exec $CTID -- bash -c "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
