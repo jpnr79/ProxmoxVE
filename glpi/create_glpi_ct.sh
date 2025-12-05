@@ -33,7 +33,6 @@ pct create $CTID $TEMPLATE \
   --cores $CPUS \
   --rootfs $STORAGE:$DISK \
   --net0 name=eth0,bridge=$NETBRIDGE,ipaddr=$IP,gw=$GATEWAY \
-  --dns $DNS \
   --arch amd64 \
   --ostype debian \
   --unprivileged 1 \
