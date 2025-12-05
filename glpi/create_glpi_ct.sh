@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -e
-
-# VARIÁVEIS - AJUSTE AQUI
+# ===========================================
+# CONFIGURAÇÃO PRINCIPAL DO CONTAINER
+# ===========================================
 CTID=199
 HOSTNAME="SRV-GLPI"
 IP="192.168.0.199/24"
@@ -13,14 +14,16 @@ TEMPLATE="local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
 STORAGE="local-lvm"
 NETBRIDGE="vmbr0"
 GLPI_DB_PASS="SenhaFort3!"
-
+CT_ROOT_PASS="admin"
 # 3 DIRETÓRIOS PERSISTENTES
 PLUGINS_MP="/var/lib/vz/glpi-plugins-${CTID}"
 MARKETPLACE_MP="/var/lib/vz/glpi-marketplace-${CTID}"
 FILES_MP="/var/lib/vz/glpi-files-${CTID}"
 
 log() { echo "[PROXMOX-GLPI] $*"; }
-
+# ===========================================
+# CRIAÇÃO DO CONTAINER
+# ===========================================
 if pct status $CTID >/dev/null 2>&1; then
   log "ERRO: CTID $CTID já existe."
   exit 1
@@ -34,14 +37,15 @@ pct create $CTID $TEMPLATE \
   --rootfs $STORAGE:$DISK \
   --arch amd64 \
   --ostype debian \
-  --unprivileged 1 \
+  --root-password "$CT_ROOT_PASS" \
+  --unprivileged 0 \
   --features nesting=1
 
 log "Configurando rede..."
-pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE"
 pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 pct set $CTID -onboot 1
 
+log "Iniciando CT..."
 pct start $CTID
 sleep 30
 
@@ -49,6 +53,16 @@ log "Configurando DNS..."
 pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
 pct exec $CTID -- bash -c "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
 
+log "Testando DNS..."
+if ! nslookup google.com >/dev/null 2>&1; then
+  log "Configurando DNS manual..."
+  echo "nameserver 8.8.8.8" > /etc/resolv.conf
+  echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+fi
+
+# ===========================================
+# CONFIGURAÇÃO DE DIRETÓRIOS PERSISTENTES
+# ===========================================
 mkdir -p "$PLUGINS_MP" "$MARKETPLACE_MP" "$FILES_MP" "/var/lib/vz/dump/glpi-backups-${CTID}"
 
 pct set $CTID -mp0 "$PLUGINS_MP,mp=/var/www/glpi/plugins"
@@ -60,10 +74,12 @@ log "- Plugins:     $PLUGINS_MP → /var/www/glpi/plugins"
 log "- Marketplace: $MARKETPLACE_MP → /var/www/glpi/marketplace"
 log "- Files:       $FILES_MP → /var/www/glpi/files"
 
+# ===========================================
+# INSTALAÇÃO AUTOMÁTICA DO GLPI
+# ===========================================
 cat > /tmp/glpi_install.sh <<'EOF'
 #!/usr/bin/env bash
 set -e
-
 GLPI_VERSION="11.0.4"
 GLPI_DB_NAME="glpi"
 GLPI_DB_USER="glpi"
@@ -71,7 +87,6 @@ GLPI_DB_PASS="SenhaFort3!"
 GLPI_DIR="/var/www/glpi"
 PHP_VER="8.4"
 TZ="Europe/Lisbon"
-
 log() { echo "[GLPI-CT] $*"; }
 
 svc() {
@@ -82,37 +97,20 @@ svc() {
   fi
 }
 
-log "Testando DNS..."
-if ! nslookup google.com >/dev/null 2>&1; then
-  log "Configurando DNS manual..."
-  echo "nameserver 8.8.8.8" > /etc/resolv.conf
-  echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-fi
-
+log "Atualizando sistema e pacotes base..."
 apt update && apt -y full-upgrade
 apt -y install sudo curl wget gnupg2 ca-certificates lsb-release apt-transport-https software-properties-common
 
-log "Adicionando repositório PHP 8.4..."
-apt -y install software-properties-common lsb-release ca-certificates apt-transport-https gnupg2
-
-# ✅ CHAVE GPG CORRETA (2025)
+log "Configurando repositório PHP 8.4..."
 curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/php-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://packages.sury.org/php/ \$(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
 
-# ✅ REPO CORRETO (signed-by)
-echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
-
-# ✅ UPDATE OBRIGATÓRIO
 apt update
-
-# ✅ TESTA PHP 8.4 (debug)
-apt-cache policy php8.4-fpm || log "ERRO: PHP 8.4 não encontrado!"
-
-# ✅ PHP 8.4 + EXTENSÕES
+apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
 apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
   php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
   php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
 
-apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
 svc enable apache2 mariadb redis-server
 svc start apache2 mariadb redis-server
 
@@ -142,11 +140,7 @@ GRANT ALL PRIVILEGES ON ${GLPI_DB_NAME}.* TO '${GLPI_DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# ✅ PHP 8.4
-apt -y install php${PHP_VER}-fpm php${PHP_VER}-mysql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-intl \
-  php${PHP_VER}-mbstring php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-apcu php${PHP_VER}-ldap \
-  php${PHP_VER}-imap php${PHP_VER}-bcmath php${PHP_VER}-soap php${PHP_VER}-redis
-
+# Configurar PHP
 PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
 sed -i 's/memory_limit.*/memory_limit = 512M/' $PHP_INI
 sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' $PHP_INI
