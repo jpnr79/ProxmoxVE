@@ -32,13 +32,18 @@ pct create $CTID $TEMPLATE \
   --memory $RAM \
   --cores $CPUS \
   --rootfs $STORAGE:$DISK \
-  --net0 name=eth0,bridge=$NETBRIDGE,ipaddr=$IP,gw=$GATEWAY \
   --arch amd64 \
   --ostype debian \
   --unprivileged 1 \
-  --features nesting=1 \
+  --features nesting=1
   
-pct set $CTID --onboot 1
+# ✅ CONFIGURAR REDE COM pct set (sintaxe 100% correta)
+log "Configurando rede..."
+pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY,type=veth"
+
+# ✅ STARTUP COM pct set
+pct set $CTID -onboot 1
+
 pct start $CTID
 sleep 30
 
