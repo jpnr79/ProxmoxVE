@@ -45,12 +45,13 @@ pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
 pct set $CTID -onboot 1
 
 
-log "🔑 Senha root definida: $CT_ROOT_PASS"
+
 log "Iniciando CT..."
 pct start $CTID
 sleep 30
 # ✅ SENHA ROOT DEFINIDA AQUI (método correto)
 pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
+log "🔑 Senha root definida: $CT_ROOT_PASS"
 log "Configurando DNS..."
 pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
 pct exec $CTID -- bash -c "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
@@ -109,9 +110,7 @@ echo "deb [signed-by=/usr/share/keyrings/php-archive-keyring.gpg] https://packag
 
 apt update
 apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
-apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
-  php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
-  php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
+
 
 svc enable apache2 mariadb redis-server
 svc start apache2 mariadb redis-server
@@ -142,13 +141,19 @@ GRANT ALL PRIVILEGES ON ${GLPI_DB_NAME}.* TO '${GLPI_DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# Configurar PHP
+log "Instalando PHP 8.4 + extensões..."
+apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
+  php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
+  php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
+log "Usando PHP versão: $PHP_VER"
+
+# ✅ AGORA configura php.ini (caminho corrigido)
 PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
-sed -i 's/memory_limit.*/memory_limit = 512M/' $PHP_INI
-sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' $PHP_INI
-sed -i 's/post_max_size.*/post_max_size = 128M/' $PHP_INI
-sed -i 's/max_execution_time.*/max_execution_time = 300/' $PHP_INI
-sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" $PHP_INI
+sed -i 's/memory_limit.*/memory_limit = 512M/' "$PHP_INI"
+sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' "$PHP_INI"
+sed -i 's/post_max_size.*/post_max_size = 128M/' "$PHP_INI"
+sed -i 's/max_execution_time.*/max_execution_time = 300/' "$PHP_INI"
+sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" "$PHP_INI"
 
 svc restart php${PHP_VER}-fpm
 
