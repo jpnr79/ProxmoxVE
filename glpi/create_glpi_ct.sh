@@ -48,7 +48,7 @@ pct set $CTID -onboot 1
 
 log "Iniciando CT..."
 pct start $CTID
-sleep 30
+sleep 15
 # ✅ SENHA ROOT DEFINIDA AQUI (método correto)
 pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
 log "🔑 Senha root definida: $CT_ROOT_PASS"
