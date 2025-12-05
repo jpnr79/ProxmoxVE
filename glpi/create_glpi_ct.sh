@@ -6,7 +6,7 @@ CTID=199
 HOSTNAME="SRV-GLPI"
 IP="192.168.0.199/24"
 GATEWAY="192.168.0.1"
-DNS="8.8.8.8"
+DNS="8.8.8.8,1.1.1.1"
 RAM=4096
 CPUS=2
 DISK=40
@@ -15,26 +15,25 @@ STORAGE="local-lvm"
 NETBRIDGE="vmbr0"
 GLPI_DB_PASS="SenhaFort3!"
 
-# DIRETÓRIOS PERSISTENTES PARA PLUGINS/MARKETPLACE
+# ✅ 3 DIRETÓRIOS PERSISTENTES
 PLUGINS_MP="/var/lib/vz/glpi-plugins-${CTID}"
 MARKETPLACE_MP="/var/lib/vz/glpi-marketplace-${CTID}"
+FILES_MP="/var/lib/vz/glpi-files-${CTID}"
 
 log() { echo "[PROXMOX-GLPI] $*"; }
 
-# Verifica CTID
 if pct status $CTID >/dev/null 2>&1; then
   log "ERRO: CTID $CTID já existe."
   exit 1
 fi
 
-log "Criando CT $CTID com persistência plugins/marketplace..."
+log "Criando CT $CTID com 3 bind mounts persistentes..."
 pct create $CTID $TEMPLATE \
   --hostname $HOSTNAME \
   --memory $RAM \
   --cores $CPUS \
   --rootfs $STORAGE:$DISK \
   --net0 name=eth0,bridge=$NETBRIDGE,ipaddr=$IP,gw=$GATEWAY \
-  --dns $DNS \
   --arch amd64 \
   --ostype debian \
   --unprivileged 1 \
@@ -44,28 +43,35 @@ pct create $CTID $TEMPLATE \
 pct start $CTID
 sleep 30
 
-# CRIA DIRETÓRIOS PERSISTENTES NO HOST
-mkdir -p "$PLUGINS_MP" "$MARKETPLACE_MP" "/var/lib/vz/dump/glpi-backups-${CTID}"
+# ✅ CONFIGURA DNS
+log "Configurando DNS..."
+pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
+pct exec $CTID -- bash -c "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
 
-# BIND MOUNTS PARA PLUGINS E MARKETPLACE
+# ✅ CRIA 3 DIRETÓRIOS PERSISTENTES NO HOST
+mkdir -p "$PLUGINS_MP" "$MARKETPLACE_MP" "$FILES_MP" "/var/lib/vz/dump/glpi-backups-${CTID}"
+
+# ✅ 3 BIND MOUNTS
 pct set $CTID -mp0 "$PLUGINS_MP,mp=/var/www/glpi/plugins"
-pct set $CTID -mp1 "$MARKETPLACE_MP,mp=/var/www/glpi/marketplace"
+pct set $CTID -mp1 "$MARKETPLACE_MP,mp=/var/www/glpi/marketplace"  
+pct set $CTID -mp2 "$FILES_MP,mp=/var/www/glpi/files"
 
-log "Bind mounts criados:"
-log "- Plugins: $PLUGINS_MP → /var/www/glpi/plugins"
+log "✅ Bind mounts criados:"
+log "- Plugins:     $PLUGINS_MP → /var/www/glpi/plugins"
 log "- Marketplace: $MARKETPLACE_MP → /var/www/glpi/marketplace"
+log "- Files:       $FILES_MP → /var/www/glpi/files"
 
-# Script interno otimizado
+# Script interno atualizado
 cat > /tmp/glpi_install.sh <<'EOF'
 #!/usr/bin/env bash
 set -e
 
-GLPI_VERSION="11.0.4"
+GLPI_VERSION="11.0.0"
 GLPI_DB_NAME="glpi"
 GLPI_DB_USER="glpi"
 GLPI_DB_PASS="SenhaFort3!"
 GLPI_DIR="/var/www/glpi"
-PHP_VER="8.4"
+PHP_VER="8.3"
 TZ="Europe/Lisbon"
 
 log() { echo "[GLPI-CT] $*"; }
@@ -78,17 +84,22 @@ svc() {
   fi
 }
 
-# Atualiza sistema
+# Testa DNS
+log "Testando DNS..."
+if ! nslookup google.com >/dev/null 2>&1; then
+  log "Configurando DNS manual..."
+  echo "nameserver 8.8.8.8" > /etc/resolv.conf
+  echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+fi
+
 apt update && apt -y full-upgrade
 apt -y install sudo curl wget gnupg2 ca-certificates lsb-release apt-transport-https software-properties-common
 
-# Pacotes principais
 apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
-
 svc enable apache2 mariadb redis-server
 svc start apache2 mariadb redis-server
 
-# TUNING MARIADB GLPI
+# MariaDB tuning
 cat >/etc/mysql/mariadb.conf.d/60-glpi.cnf <<EOM
 [mysqld]
 character-set-server = utf8mb4
@@ -107,7 +118,6 @@ EOM
 
 svc restart mariadb
 
-# DB GLPI
 mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS ${GLPI_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${GLPI_DB_USER}'@'localhost' IDENTIFIED BY '${GLPI_DB_PASS}';
@@ -115,9 +125,9 @@ GRANT ALL PRIVILEGES ON ${GLPI_DB_NAME}.* TO '${GLPI_DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# PHP + extensões
-apt -y install php${PHP_VER}-fpm php${PHP_VER}-mysql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-intl \\
-  php${PHP_VER}-mbstring php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-apcu php${PHP_VER}-ldap \\
+# PHP
+apt -y install php${PHP_VER}-fpm php${PHP_VER}-mysql php${PHP_VER}-curl php${PHP_VER}-gd php${PHP_VER}-intl \
+  php${PHP_VER}-mbstring php${PHP_VER}-xml php${PHP_VER}-zip php${PHP_VER}-apcu php${PHP_VER}-ldap \
   php${PHP_VER}-imap php${PHP_VER}-bcmath php${PHP_VER}-soap php${PHP_VER}-redis
 
 PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
@@ -129,19 +139,20 @@ sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" $PHP_INI
 
 svc restart php${PHP_VER}-fpm
 
-# REDIS otimizado
+# Redis
 sed -i 's/^supervised .*/supervised systemd/' /etc/redis/redis.conf
 sed -i 's/^# maxmemory <bytes>/maxmemory 512mb/' /etc/redis/redis.conf
 sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
 sed -i 's/^save 900 1/# save 900 1/' /etc/redis/redis.conf
 svc restart redis-server
 
-# ✅ IMPORTANTE: Inicializa diretórios persistentes com permissões corretas
-mkdir -p ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace
-chown -R www-data:www-data ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace
-chmod -R 755 ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace
+# ✅ INICIALIZA 3 DIRETÓRIOS PERSISTENTES
+log "Inicializando diretórios persistentes..."
+mkdir -p ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
+chown -R www-data:www-data ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
+chmod -R 755 ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
 
-# Instala GLPI
+# GLPI
 mkdir -p /tmp/glpi
 cd /tmp/glpi
 wget -O glpi.tgz "https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/glpi-${GLPI_VERSION}.tgz"
@@ -173,8 +184,8 @@ a2ensite glpi.conf
 a2enmod proxy proxy_fcgi rewrite
 svc restart apache2
 
-# SCRIPTS BACKUP/UPDATE (PRESERVA PLUGINS/MARKETPLACE)
-mkdir -p /backup/glpi
+# ✅ SCRIPTS BACKUP/UPDATE ATUALIZADOS (3 diretórios)
+mkdir -p /backup/glpi /root/scripts
 
 cat >/root/scripts/backup_glpi.sh <<'EOS'
 #!/bin/bash
@@ -183,79 +194,82 @@ BACKUP_DIR="/backup/glpi"
 DB_NAME="glpi"
 DB_USER="glpi"
 DB_PASS="SenhaFort3!"
+GLPI_DIR="/var/www/glpi"
 
-# Backup arquivos CORE (exclui plugins/marketplace persistentes)
-tar czf ${BACKUP_DIR}/glpi_core_${DATE}.tar.gz \\
-  --exclude=${GLPI_DIR}/plugins \\
-  --exclude=${GLPI_DIR}/marketplace \\
+# 1. CORE (exclui 3 persistentes)
+tar czf ${BACKUP_DIR}/glpi_core_${DATE}.tar.gz \
+  --exclude=${GLPI_DIR}/plugins \
+  --exclude=${GLPI_DIR}/marketplace \
+  --exclude=${GLPI_DIR}/files \
   -C /var/www glpi
 
-# Backup DB
+# 2. DATABASE
 mysqldump -u${DB_USER} -p${DB_PASS} ${DB_NAME} > ${BACKUP_DIR}/glpi_db_${DATE}.sql
 
-# Backup plugins/marketplace (separado)
-tar czf ${BACKUP_DIR}/glpi_plugins_${DATE}.tar.gz -C /var/www/glpi plugins marketplace
+# 3. PLUGINS + MARKETPLACE + FILES (separados)
+tar czf ${BACKUP_DIR}/glpi_plugins_${DATE}.tar.gz -C ${GLPI_DIR} plugins marketplace
+tar czf ${BACKUP_DIR}/glpi_files_${DATE}.tar.gz -C ${GLPI_DIR} files
 
+# Limpeza >7 dias
 find ${BACKUP_DIR} -type f -mtime +7 -delete
-echo "Backup concluído $(ls -la ${BACKUP_DIR} | tail -1)"
+echo "✅ Backup completo: $(ls -la ${BACKUP_DIR} | tail -1)"
 EOS
 
 cat >/root/scripts/update_glpi.sh <<'EOS'
 #!/bin/bash
-GLPI_VERSION="11.0.1"  # AJUSTE AQUI A NOVA VERSÃO
+GLPI_VERSION="11.0.1"  # AJUSTE AQUI
 GLPI_DIR="/var/www/glpi"
 BACKUP_DIR="/backup/glpi"
 
 echo "=== UPDATE GLPI ${GLPI_VERSION} ==="
-echo "1. Backup..."
+echo "1. Backup completo..."
 /root/scripts/backup_glpi.sh
 
-echo "2. Download nova versão..."
+echo "2. Download..."
 cd /tmp
 wget -O glpi_new.tgz "https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/glpi-${GLPI_VERSION}.tgz"
 tar xzf glpi_new.tgz
 
-echo "3. Backup config atual..."
+echo "3. Backup config..."
 cp -r ${GLPI_DIR}/config ${BACKUP_DIR}/config_backup_$(date +%Y%m%d)
 
-echo "4. Atualiza CORE (PRESERVA plugins/marketplace)..."
-rsync -av --delete --exclude=plugins --exclude=marketplace --exclude=config glpi/ ${GLPI_DIR}/
+echo "4. Update CORE (PRESERVA 3 diretórios)..."
+rsync -av --delete \
+  --exclude=plugins \
+  --exclude=marketplace \
+  --exclude=files \
+  --exclude=config \
+  glpi/ ${GLPI_DIR}/
+
 chown -R www-data:www-data ${GLPI_DIR}
 chmod -R 755 ${GLPI_DIR}
 
-echo "5. Restart services..."
-service apache2 restart
-service php8.3-fpm restart
+svc restart apache2 php8.3-fpm
 
-echo "✅ GLPI atualizado para ${GLPI_VERSION}"
-echo "Plugins/marketplace PRESERVADOS em bind mounts"
-echo "Verifique: http://$(hostname -I | awk '{print $1}')"
+echo "✅ GLPI ${GLPI_VERSION} atualizado!"
+echo "✅ Plugins/Marketplace/Files PRESERVADOS"
+echo "🌐 http://$(hostname -I | awk '{print \$1}')"
 EOS
 
 chmod +x /root/scripts/backup_glpi.sh /root/scripts/update_glpi.sh
-mkdir -p /root/scripts
 
-# CRON: backup diário 2AM, update semanal DOM 3AM
 echo "0 2 * * * root /root/scripts/backup_glpi.sh" >> /etc/crontab
 echo "0 3 * * 0 root /root/scripts/update_glpi.sh" >> /etc/crontab
 
 touch /etc/.pve-ignore.hosts
 
-log "GLPI ${GLPI_VERSION} pronto com PERSISTÊNCIA!"
-log "Plugins: /var/lib/vz/glpi-plugins-${CTID}"
-log "Marketplace: /var/lib/vz/glpi-marketplace-${CTID}"
+log "GLPI ${GLPI_VERSION} pronto com 3 persistências!"
 EOF
 
 chmod +x /tmp/glpi_install.sh
 pct exec $CTID -- bash /tmp/glpi_install.sh
 
 log "=============================================="
-log "✅ CT $CTID GLPI 11 PRONTO com PERSISTÊNCIA!"
+log "✅ CT $CTID GLPI 11 - 3 PERSISTÊNCIAS!"
 log "🌐 IP: $(echo $IP | cut -d/ -f1)"
-log "📂 Plugins: $PLUGINS_MP"
-log "📂 Marketplace: $MARKETPLACE_MP"
-log "💾 Backup: /var/lib/vz/dump/glpi-backups-${CTID}"
-log "🚀 Acesse: http://$(echo $IP | cut -d/ -f1)/"
-log "📋 DB: glpi/glpi/SenhaFort3!"
-log "🔄 Updates PRESERVAM plugins/marketplace"
+log "📂 Plugins:     $PLUGINS_MP"
+log "📂 Marketplace: $MARKETPLACE_MP" 
+log "📂 Files:       $FILES_MP"
+log "🚀 http://$(echo $IP | cut -d/ -f1)/"
+log "💾 Backups: /var/lib/vz/dump/glpi-backups-${CTID}"
 log "=============================================="
