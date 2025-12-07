@@ -38,7 +38,9 @@ CORES="2"
 DISK_SIZE="8"
 BRIDGE="vmbr0"
 
-DB_ROOT_PASS="adminMaria!"
+DB_ROOT_PASS="adminMaria"
+GLPI_DB_USER="glpi"
+GLPI_DB="glpi"
 GLPI_DB_PASS="YourStrongPassword"
 
 TIMEZONE="Europe/Lisbon"
@@ -132,9 +134,9 @@ create_glpi_db() {
     section "Criando banco GLPI"
     pct exec "$CT_ID" -- bash -c "
 mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
-CREATE DATABASE glpidb;
-CREATE USER 'glpiuser'@'localhost' IDENTIFIED BY '${GLPI_DB_PASS}';
-GRANT ALL PRIVILEGES ON glpidb.* TO 'glpiuser'@'localhost';
+CREATE DATABASE ${GLPI_DB};
+CREATE USER '${GLPI_DB_USER}'@'localhost' IDENTIFIED BY '${GLPI_DB_PASS}';
+GRANT ALL PRIVILEGES ON ${GLPI_DB}.* TO '${GLPI_DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 " || abort "Falha ao criar banco GLPI."
