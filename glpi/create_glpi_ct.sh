@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================================
-#  COLORS
+# COLORS
 # ============================================================
 RED="\e[31m"
 GREEN="\e[32m"
@@ -14,19 +14,12 @@ warn()     { echo -e "${YELLOW}[AVISO]${RESET} $*"; }
 error()    { echo -e "${RED}[ERRO]${RESET} $*" >&2; }
 section()  { echo -e "\n${BLUE}==== $* ====${RESET}\n"; }
 
-# ============================================================
-#  FUNÇÃO DE ABORTO
-# ============================================================
-abort() {
-    error "$1"
-    exit 1
-}
+abort() { error "$1"; exit 1; }
 
 # ============================================================
-#  INPUT DO USUÁRIO
+# INPUT DO USUÁRIO
 # ============================================================
 section "Entrada de dados"
-
 read -p "CT_ID (ex: 200): " CT_ID
 read -p "IP (ex: 192.168.1.50/24 ou dhcp): " IP_ADDR
 read -p "Gateway (ex: 192.168.1.1): " GATEWAY
@@ -36,7 +29,7 @@ read -p "Gateway (ex: 192.168.1.1): " GATEWAY
 [[ -z "$GATEWAY" ]] && abort "Gateway inválido."
 
 # ============================================================
-#  VARIÁVEIS FIXAS
+# VARIÁVEIS FIXAS
 # ============================================================
 HOSTNAME="ubuntu-${CT_ID}"
 PASSWORD="admin"
@@ -57,18 +50,18 @@ TEMPLATE_PATH="/var/lib/vz/template/cache/${TEMPLATE}"
 STORAGE="local-lvm"
 
 # ============================================================
-#  VERIFICAR TEMPLATE
+# VERIFICAR TEMPLATE
 # ============================================================
 section "Verificando template"
 [[ ! -f "$TEMPLATE_PATH" ]] && abort "Template não encontrado: $TEMPLATE_PATH"
 log "Template encontrado."
 
 # ============================================================
-#  FUNÇÃO CRIAR CONTAINER
+# FUNÇÕES
 # ============================================================
+
 create_container() {
     section "Criando CT"
-
     pct create $CT_ID "$TEMPLATE_PATH" \
         --hostname "$HOSTNAME" \
         --password "$PASSWORD" \
@@ -80,62 +73,45 @@ create_container() {
         --features nesting=1 \
         --swap 512 || abort "Falha ao criar o CT."
 
-    log "Container criado com sucesso."
-
     pct start $CT_ID || abort "Falha ao iniciar o CT."
     sleep 5
+    log "Container criado e iniciado com sucesso."
 }
 
-# ============================================================
-#  TIMEZONE & LOCALE
-# ============================================================
 configure_locale() {
     section "Configurando timezone e locale"
-
     pct exec "$CT_ID" -- bash -c "
         timedatectl set-timezone '${TIMEZONE}'
         apt update
-        apt install -y locales
+        apt install -y locales tzdata
         sed -i 's/^# *${LOCALE}/${LOCALE}/' /etc/locale.gen
         locale-gen '${LOCALE}'
         update-locale LANG='${LOCALE}'
     " || abort "Falha ao configurar locale."
-
     log "Timezone e locale configurados."
 }
 
-# ============================================================
-#  UPDATE DO SISTEMA
-# ============================================================
 update_system() {
     section "Atualizando sistema"
-
     pct exec "$CT_ID" -- bash -c "
         apt update &&
         apt full-upgrade -y &&
         apt autoremove -y &&
         apt clean
     " || abort "Falha nos updates."
-
     log "Sistema atualizado."
 }
 
-# ============================================================
-#  INSTALAR E CONFIGURAR MARIADB
-# ============================================================
 install_mariadb() {
     section "Instalando MariaDB"
-
-    pct exec "$CT_ID" -- bash -c "apt install -y mariadb-server" \
-        || abort "Falha ao instalar MariaDB."
+    pct exec "$CT_ID" -- bash -c "
+        apt update
+        apt install -y mariadb-server mariadb-client
+    " || abort "Falha ao instalar MariaDB."
 
     section "Configurando MariaDB"
-
     pct exec "$CT_ID" -- bash -c "
         mysql -u root -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}'; FLUSH PRIVILEGES;\"
-    " || abort "Falha ao definir senha root."
-
-    pct exec "$CT_ID" -- bash -c "
         mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');
@@ -143,17 +119,19 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
-    " || abort "Falha na configuração de segurança MariaDB."
 
-    log "MariaDB instalado e seguro."
+        # Importar timezone
+        if command -v mysql_tzinfo_to_sql >/dev/null 2>&1; then
+            mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root -p\"${DB_ROOT_PASS}\" mysql
+        else
+            echo '[AVISO] mysql_tzinfo_to_sql não encontrado, ignorando importação de timezone.'
+        fi
+    " || abort "Falha na configuração de MariaDB."
+    log "MariaDB instalado, seguro e timezone carregado."
 }
 
-# ============================================================
-#  CRIAR DB DO GLPI
-# ============================================================
 create_glpi_db() {
     section "Criando banco GLPI"
-
     pct exec "$CT_ID" -- bash -c "
         mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
 CREATE DATABASE glpidb;
@@ -162,101 +140,102 @@ GRANT ALL PRIVILEGES ON glpidb.* TO 'glpiuser'@'localhost';
 FLUSH PRIVILEGES;
 EOF
     " || abort "Falha ao criar banco GLPI."
-
     log "Banco GLPI criado."
 }
 
-# ============================================================
-#  APACHE + PHP 8.4
-# ============================================================
 install_apache_php() {
     section "Instalando Apache + PHP 8.4"
-
     pct exec "$CT_ID" -- bash -c "
-apt update && apt install -y apache2 php8.4 php8.4-fpm libapache2-mod-php8.4 \
+apt update
+apt install -y apache2 php8.4 php8.4-fpm libapache2-mod-php8.4 \
 php8.4-mysql php8.4-curl php8.4-gd php8.4-intl php8.4-ldap \
-php8.4-xml php8.4-bz2 php8.4-zip php8.4-cli apache2 apache2-bin apache2-utils
+php8.4-xml php8.4-bz2 php8.4-zip php8.4-cli php8.4-mbstring php8.4-apcu \
+php8.4-imap php8.4-gmp php8.4-bcmath php8.4-xmlrpc
 
-# Ativar módulos Apache
-a2enmod proxy_fcgi setenvif
+a2enmod proxy_fcgi setenvif rewrite
 a2enconf php8.4-fpm
-a2enmod rewrite
 
-# Reiniciar Apache
+systemctl restart php8.4-fpm
 systemctl restart apache2
 " || abort "Falha ao instalar Apache/PHP."
-
-    log "Apache e PHP instalados."
+    log "Apache e PHP instalados e configurados."
 }
 
-# ============================================================
-#  GLPI
-# ============================================================
 install_glpi() {
     section "Instalando GLPI"
-
     pct exec "$CT_ID" -- bash -c "
-GLPI_DIR=\"/var/www/html/glpi\"
+GLPI_PARENT_DIR='/var/www'
+GLPI_DIR='\$GLPI_PARENT_DIR/glpi'
 
-# Garantir ferramentas essenciais
 apt update
 apt install -y wget curl jq tar
 
-# Obter URL da última release estável no GitHub
-API_URL=\"https://api.github.com/repos/glpi-project/glpi/releases/latest\"
+# Baixar última release do GitHub
+API_URL='https://api.github.com/repos/glpi-project/glpi/releases/latest'
 DOWNLOAD_URL=\$(curl -sL \$API_URL | jq -r .tarball_url)
+[ -z \"\$DOWNLOAD_URL\" ] && { echo 'Erro: não foi possível obter URL do GLPI'; exit 1; }
 
-if [ -z \"\$DOWNLOAD_URL\" ]; then
-  echo \"[ERRO] Não foi possível obter a URL da última release.\" >&2
-  exit 1
-fi
-
-# Baixar e extrair
+mkdir -p \$GLPI_PARENT_DIR
 wget -O /tmp/glpi-latest.tar.gz \$DOWNLOAD_URL
-mkdir -p /var/www/html
-tar -xzf /tmp/glpi-latest.tar.gz -C /var/www/html/
+tar -xzf /tmp/glpi-latest.tar.gz -C \$GLPI_PARENT_DIR
+
+# Renomear diretório extraído para 'glpi'
+EXTRACTED_DIR=\$(ls -d \$GLPI_PARENT_DIR/*/ | head -1)
+mv \"\$EXTRACTED_DIR\" \"\$GLPI_DIR\" 2>/dev/null || true
 rm -f /tmp/glpi-latest.tar.gz
 
-# Renomear diretório extraído para glpi
-EXTRACTED_DIR=\$(ls /var/www/html | grep glpi | head -1)
-mv \"/var/www/html/\$EXTRACTED_DIR\" \"\$GLPI_DIR\" 2>/dev/null || true
-
-# Ajustar permissões
+# Permissões corretas
 chown -R www-data:www-data \$GLPI_DIR
-chmod -R 755 \$GLPI_DIR
+find \$GLPI_DIR -type d -exec chmod 755 {} \;
+find \$GLPI_DIR -type f -exec chmod 644 {} \;
 
-# VirtualHost Apache
-VHOST_CONF=\"/etc/apache2/sites-available/glpi.conf\"
+# VirtualHost apontando para /public
+VHOST_CONF='/etc/apache2/sites-available/glpi.conf'
 cat <<EOF > \$VHOST_CONF
 <VirtualHost *:80>
     ServerAdmin webmaster@localhost
     DocumentRoot \$GLPI_DIR/public
     <Directory \$GLPI_DIR/public>
+        Options Indexes FollowSymLinks
+        AllowOverride All
         Require all granted
+
         RewriteEngine On
         RewriteCond %{HTTP:Authorization} ^(.+)$
         RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
         RewriteCond %{REQUEST_FILENAME} !-f
         RewriteRule ^(.*)$ index.php [QSA,L]
     </Directory>
-    ErrorLog \${APACHE_LOG_DIR}/error.log
-    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/glpi-error.log
+    CustomLog \${APACHE_LOG_DIR}/glpi-access.log combined
 </VirtualHost>
 EOF
 
-# Habilitar site e reiniciar serviços
 a2ensite glpi.conf
 a2dissite 000-default.conf
-service apache2 restart
-service php8.4-fpm restart
-" || abort "Falha ao instalar GLPI."
+a2enmod rewrite
 
-    log "GLPI instalado com sucesso."
+systemctl restart php8.4-fpm
+systemctl restart apache2
+" || abort "Falha ao instalar GLPI."
+    log "GLPI instalado com sucesso com DocumentRoot /public."
 }
 
+optimize_php_glpi() {
+    section "Otimização PHP para GLPI"
+    pct exec "$CT_ID" -- bash -c "
+apt update
+apt install -y php8.4-opcache php8.4-apcu
+phpenmod apcu opcache
+
+systemctl restart php8.4-fpm
+systemctl restart apache2
+" || abort "Falha na otimização PHP/GLPI."
+    log "PHP otimizado com APCu/Opcache ativados."
+}
 
 # ============================================================
-#  EXECUÇÃO EM ORDEM
+# EXECUÇÃO EM ORDEM
 # ============================================================
 create_container
 configure_locale
@@ -265,6 +244,7 @@ install_mariadb
 create_glpi_db
 install_apache_php
 install_glpi
+optimize_php_glpi
 
 section "PROCESSO FINALIZADO"
 log "CT ${CT_ID} criado e configurado com sucesso!"
