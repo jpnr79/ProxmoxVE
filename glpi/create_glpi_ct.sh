@@ -1,326 +1,87 @@
 #!/usr/bin/env bash
-set -e
-# ===========================================
-# CONFIGURAÇÃO PRINCIPAL DO CONTAINER
-# ===========================================
-CTID=199
-HOSTNAME="SRV-GLPI"
-IP="192.168.0.199/24"
-GATEWAY="192.168.0.1"
-RAM=4096
-CPUS=2
-DISK=40
-TEMPLATE="local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst"
+
+echo "---- Criar CT Ubuntu no Proxmox ----"
+
+# ================================
+# Entrada de dados do usuário
+# ================================
+read -p "Informe o CT_ID (ex: 200): " CT_ID
+read -p "Informe o IP (ex: 192.168.1.50/24 ou dhcp): " IP_ADDR
+read -p "Informe o Gateway (ex: 192.168.1.1): " GATEWAY
+
+# ================================
+# Variáveis fixas
+# ================================
+HOSTNAME="ubuntu-${CT_ID}"
+PASSWORD="SenhaForte123"
+MEMORY="2048"
+CORES="2"
+DISK_SIZE="8"
+BRIDGE="vmbr0"
+
+# Timezone e Locale padrão (Portugal)
+TIMEZONE="Europe/Lisbon"
+LOCALE="pt_PT.UTF-8"
+
+TEMPLATE="ubuntu-25.04-standard_25.04-1.1_amd64.tar.zst"
+TEMPLATE_PATH="/var/lib/vz/template/cache/${TEMPLATE}"
+
 STORAGE="local-lvm"
-NETBRIDGE="vmbr0"
-GLPI_DB_PASS="SenhaFort3!"
-CT_ROOT_PASS="admin"
-# 3 DIRETÓRIOS PERSISTENTES
-PLUGINS_MP="/var/lib/vz/glpi-plugins-${CTID}"
-MARKETPLACE_MP="/var/lib/vz/glpi-marketplace-${CTID}"
-FILES_MP="/var/lib/vz/glpi-files-${CTID}"
 
-log() { echo "[PROXMOX-GLPI] $*"; }
-# ===========================================
-# CRIAÇÃO DO CONTAINER
-# ===========================================
-if pct status $CTID >/dev/null 2>&1; then
-  log "ERRO: CTID $CTID já existe."
-  exit 1
+# ================================
+# Verificação de template
+# ================================
+if [ ! -f "$TEMPLATE_PATH" ]; then
+    echo "❌ Template não encontrado em: $TEMPLATE_PATH"
+    exit 1
 fi
 
-log "Criando CT $CTID..."
-pct create $CTID $TEMPLATE \
-  --hostname $HOSTNAME \
-  --memory $RAM \
-  --cores $CPUS \
-  --rootfs $STORAGE:$DISK \
-  --arch amd64 \
-  --ostype debian \
-  --unprivileged 0 \
-  --features nesting=1
+# ================================
+# Criação do CT
+# ================================
+echo "📦 A criar CT Ubuntu ID: $CT_ID"
 
-log "Configurando rede..."
-pct set $CTID -net0 "name=eth0,bridge=$NETBRIDGE,ip=$IP,gw=$GATEWAY"
-pct set $CTID -onboot 1
+pct create $CT_ID "$TEMPLATE_PATH" \
+    --hostname "$HOSTNAME" \
+    --password "$PASSWORD" \
+    --cores $CORES \
+    --memory $MEMORY \
+    --rootfs "${STORAGE}:${DISK_SIZE}" \
+    --net0 "name=eth0,bridge=${BRIDGE},ip=${IP_ADDR},gw=${GATEWAY}" \
+    --unprivileged 1 \
+    --features nesting=1 \
+    --swap 512
 
-log "Iniciando CT..."
-pct start $CTID
-sleep 15
-# ✅ SENHA ROOT DEFINIDA AQUI (método correto)
-pct exec $CTID -- passwd root <<< "$CT_ROOT_PASS"$'\n'"$CT_ROOT_PASS"
-
-log "🔑 Senha root definida: $CT_ROOT_PASS"
-log "Configurando DNS..."
-pct exec $CTID -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
-pct exec $CTID -- bash -c "echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
-
-log "Testando DNS..."
-if ! nslookup google.com >/dev/null 2>&1; then
-  log "Configurando DNS manual..."
-  echo "nameserver 8.8.8.8" > /etc/resolv.conf
-  echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+if [ $? -ne 0 ]; then
+    echo "❌ Erro na criação do container."
+    exit 1
 fi
 
-# ===========================================
-# CONFIGURAÇÃO DE DIRETÓRIOS PERSISTENTES
-# ===========================================
-mkdir -p "$PLUGINS_MP" "$MARKETPLACE_MP" "$FILES_MP" "/var/lib/vz/dump/glpi-backups-${CTID}"
-pct set $CTID -mp0 "$PLUGINS_MP,mp=/var/www/glpi/plugins"
-pct set $CTID -mp1 "$MARKETPLACE_MP,mp=/var/www/glpi/marketplace"  
-pct set $CTID -mp2 "$FILES_MP,mp=/var/www/glpi/files"
-log "✅ Bind mounts criados:"
-log "- Plugins:     $PLUGINS_MP → /var/www/glpi/plugins"
-log "- Marketplace: $MARKETPLACE_MP → /var/www/glpi/marketplace"
-log "- Files:       $FILES_MP → /var/www/glpi/files"
+echo "🚀 A iniciar CT..."
+pct start $CT_ID
+sleep 5
 
-# ===========================================
-# INSTALAÇÃO AUTOMÁTICA DO GLPI
-# ===========================================
-cat > /tmp/glpi_install.sh <<'EOF'
-#!/usr/bin/env bash
-set -e
-GLPI_VERSION="11.0.4"
-GLPI_DB_NAME="glpi"
-GLPI_DB_USER="glpi"
-GLPI_DB_PASS="SenhaFort3!"
-GLPI_DIR="/var/www/glpi"
-PHP_VER="8.4"
-TZ="Europe/Lisbon"
-log() { echo "[GLPI-CT] $*"; }
+# ================================
+# Configurar timezone (Portugal)
+# ================================
+echo "🕒 A definir timezone (${TIMEZONE})..."
+pct exec $CT_ID -- bash -c "timedatectl set-timezone '${TIMEZONE}'"
 
-svc() {
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl "$1" "$2" 2>/dev/null || service "$2" "$1"
-  else
-    service "$2" "$1"
-  fi
-}
+# ================================
+# Configurar locale (Portugal)
+# ================================
+echo "🌐 A configurar locale (${LOCALE})..."
 
-# ===========================================
-# ✅ REPOSITÓRIO SURY PHP CORRIGIDO (2025)
-# ===========================================
-log "Configurando repositório Sury PHP (moderno 2025)..."
+pct exec $CT_ID -- bash -c "apt update && apt install -y locales"
+pct exec $CT_ID -- bash -c "sed -i 's/^# *${LOCALE}/${LOCALE}/' /etc/locale.gen"
+pct exec $CT_ID -- bash -c "locale-gen '${LOCALE}'"
+pct exec $CT_ID -- bash -c "update-locale LANG='${LOCALE}'"
 
-# Pacotes necessários
-apt -y install lsb-release ca-certificates apt-transport-https gnupg2 software-properties-common
+# ================================
+# Updates automáticos
+# ================================
+echo "🔧 A instalar updates dentro do CT..."
+pct exec $CT_ID -- bash -c "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
 
-# ✅ CHAVE GPG CORRETA (keyrings)
-curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/deb.sury.org-php.gpg
-
-# ✅ REPO MODERNO (signed-by)
-echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
-
-# ✅ UPDATE OBRIGATÓRIO
-apt update
-
-# ===========================================
-# ✅ DETECTA MELHOR VERSÃO PHP DISPONÍVEL
-# ===========================================
-if apt-cache policy php8.4-fpm | grep -q "Candidate:.*8.4"; then
-  log "✅ PHP 8.4 disponível!"
-  PHP_VER="8.4"
-  apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
-    php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
-    php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
-elif apt-cache policy php8.3-fpm | grep -q "Candidate:.*8.3"; then
-  log "✅ PHP 8.3 disponível (fallback)"
-  PHP_VER="8.3"
-  apt -y install php8.3-fpm php8.3-mysql php8.3-curl php8.3-gd php8.3-intl \
-    php8.3-mbstring php8.3-xml php8.3-zip php8.3-apcu php8.3-ldap \
-    php8.3-imap php8.3-bcmath php8.3-soap php8.3-redis
-elif apt-cache policy php8.2-fpm | grep -q "Candidate:.*8.2"; then
-  log "✅ PHP 8.2 disponível (fallback)"
-  PHP_VER="8.2"
-  apt -y install php8.2-fpm php8.2-mysql php8.2-curl php8.2-gd php8.2-intl \
-    php8.2-mbstring php8.2-xml php8.2-zip php8.2-apcu php8.2-ldap \
-    php8.2-imap php8.2-bcmath php8.2-soap php8.2-redis
-else
-  log "ERRO: Nenhuma versão PHP 8.x encontrada!"
-  exit 1
-fi
-
-log "✅ PHP ${PHP_VER} instalado com sucesso!"
-
-# ===========================================
-# CONFIG PHP.INI (agora funciona)
-# ===========================================
-PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
-sed -i 's/memory_limit.*/memory_limit = 512M/' "$PHP_INI"
-sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' "$PHP_INI"
-sed -i 's/post_max_size.*/post_max_size = 128M/' "$PHP_INI"
-sed -i 's/max_execution_time.*/max_execution_time = 300/' "$PHP_INI"
-sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" "$PHP_INI"
-
-svc restart "php${PHP_VER}-fpm"
-
-log "Verificando PHP: $(php -v | head -1)"apt -y install apache2 apache2-utils mariadb-server mariadb-client redis-server
-
-
-svc enable apache2 mariadb redis-server
-svc start apache2 mariadb redis-server
-
-# MariaDB tuning
-cat >/etc/mysql/mariadb.conf.d/60-glpi.cnf <<EOM
-[mysqld]
-character-set-server = utf8mb4
-collation-server     = utf8mb4_unicode_ci
-innodb_buffer_pool_size = 1G
-innodb_log_file_size = 256M
-innodb_log_buffer_size = 64M
-innodb_flush_log_at_trx_commit = 2
-max_connections = 200
-table_open_cache = 4096
-slow_query_log = 1
-slow_query_log_file = /var/log/mysql/slow.log
-long_query_time = 2
-query_cache_type = 0
-EOM
-
-svc restart mariadb
-
-mysql -u root <<EOF
-CREATE DATABASE IF NOT EXISTS ${GLPI_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '${GLPI_DB_USER}'@'localhost' IDENTIFIED BY '${GLPI_DB_PASS}';
-GRANT ALL PRIVILEGES ON ${GLPI_DB_NAME}.* TO '${GLPI_DB_USER}'@'localhost';
-FLUSH PRIVILEGES;
-EOF
-
-log "Instalando PHP 8.4 + extensões..."
-apt -y install php8.4-fpm php8.4-mysql php8.4-curl php8.4-gd php8.4-intl \
-  php8.4-mbstring php8.4-xml php8.4-zip php8.4-apcu php8.4-ldap \
-  php8.4-imap php8.4-bcmath php8.4-soap php8.4-redis
-log "Usando PHP versão: $PHP_VER"
-
-# ✅ AGORA configura php.ini (caminho corrigido)
-PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
-sed -i 's/memory_limit.*/memory_limit = 512M/' "$PHP_INI"
-sed -i 's/upload_max_filesize.*/upload_max_filesize = 128M/' "$PHP_INI"
-sed -i 's/post_max_size.*/post_max_size = 128M/' "$PHP_INI"
-sed -i 's/max_execution_time.*/max_execution_time = 300/' "$PHP_INI"
-sed -i "s~;date.timezone.*~date.timezone = ${TZ}~" "$PHP_INI"
-
-svc restart php${PHP_VER}-fpm
-
-# Redis
-sed -i 's/^supervised .*/supervised systemd/' /etc/redis/redis.conf
-sed -i 's/^# maxmemory <bytes>/maxmemory 512mb/' /etc/redis/redis.conf
-sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
-sed -i 's/^save 900 1/# save 900 1/' /etc/redis/redis.conf
-svc restart redis-server
-
-log "Inicializando diretórios persistentes..."
-mkdir -p ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
-chown -R www-data:www-data ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
-chmod -R 755 ${GLPI_DIR}/plugins ${GLPI_DIR}/marketplace ${GLPI_DIR}/files
-
-# GLPI
-mkdir -p /tmp/glpi
-cd /tmp/glpi
-wget -O glpi.tgz "https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/glpi-${GLPI_VERSION}.tgz"
-tar xzf glpi.tgz
-rm -rf ${GLPI_DIR}
-mv glpi ${GLPI_DIR}
-chown -R www-data:www-data ${GLPI_DIR}
-chmod -R 755 ${GLPI_DIR}
-
-# VirtualHost
-cat >/etc/apache2/sites-available/glpi.conf <<EOM
-<VirtualHost *:80>
-    ServerName glpi11.local
-    DocumentRoot ${GLPI_DIR}/public
-    <Directory ${GLPI_DIR}/public>
-        AllowOverride All
-        Require all granted
-    </Directory>
-    <FilesMatch "\.php\$">
-        SetHandler "proxy:unix:/run/php/php${PHP_VER}-fpm.sock|fcgi://localhost/"
-    </FilesMatch>
-    ErrorLog \${APACHE_LOG_DIR}/glpi_error.log
-    CustomLog \${APACHE_LOG_DIR}/glpi_access.log combined
-</VirtualHost>
-EOM
-
-a2dissite 000-default.conf
-a2ensite glpi.conf
-a2enmod proxy proxy_fcgi rewrite
-svc restart apache2
-
-# SCRIPTS BACKUP/UPDATE
-mkdir -p /backup/glpi /root/scripts
-
-cat >/root/scripts/backup_glpi.sh <<'EOS'
-#!/bin/bash
-DATE=$(date +%Y%m%d_%H%M)
-BACKUP_DIR="/backup/glpi"
-DB_NAME="glpi"
-DB_USER="glpi"
-DB_PASS="SenhaFort3!"
-GLPI_DIR="/var/www/glpi"
-
-tar czf ${BACKUP_DIR}/glpi_core_${DATE}.tar.gz \
-  --exclude=${GLPI_DIR}/plugins \
-  --exclude=${GLPI_DIR}/marketplace \
-  --exclude=${GLPI_DIR}/files \
-  -C /var/www glpi
-
-mysqldump -u${DB_USER} -p${DB_PASS} ${DB_NAME} > ${BACKUP_DIR}/glpi_db_${DATE}.sql
-
-tar czf ${BACKUP_DIR}/glpi_plugins_${DATE}.tar.gz -C ${GLPI_DIR} plugins marketplace
-tar czf ${BACKUP_DIR}/glpi_files_${DATE}.tar.gz -C ${GLPI_DIR} files
-
-find ${BACKUP_DIR} -type f -mtime +7 -delete
-echo "✅ Backup completo: $(ls -la ${BACKUP_DIR} | tail -1)"
-EOS
-
-cat >/root/scripts/update_glpi.sh <<'EOS'
-#!/bin/bash
-GLPI_VERSION="11.0.4"
-GLPI_DIR="/var/www/glpi"
-BACKUP_DIR="/backup/glpi"
-
-echo "=== UPDATE GLPI ${GLPI_VERSION} ==="
-/root/scripts/backup_glpi.sh
-
-cd /tmp
-wget -O glpi_new.tgz "https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/glpi-${GLPI_VERSION}.tgz"
-tar xzf glpi_new.tgz
-
-cp -r ${GLPI_DIR}/config ${BACKUP_DIR}/config_backup_$(date +%Y%m%d)
-
-rsync -av --delete \
-  --exclude=plugins \
-  --exclude=marketplace \
-  --exclude=files \
-  --exclude=config \
-  glpi/ ${GLPI_DIR}/
-
-chown -R www-data:www-data ${GLPI_DIR}
-chmod -R 755 ${GLPI_DIR}
-
-systemctl restart apache2 php8.4-fpm
-
-echo "✅ GLPI ${GLPI_VERSION} atualizado!"
-echo "🌐 http://$(hostname -I | awk '{print \$1}')"
-EOS
-
-chmod +x /root/scripts/backup_glpi.sh /root/scripts/update_glpi.sh
-echo "0 2 * * * root /root/scripts/backup_glpi.sh" >> /etc/crontab
-echo "0 3 * * 0 root /root/scripts/update_glpi.sh" >> /etc/crontab
-
-touch /etc/.pve-ignore.hosts
-
-log "GLPI ${GLPI_VERSION} com PHP 8.4 pronto!"
-EOF
-
-chmod +x /tmp/glpi_install.sh
-pct exec $CTID -- bash /tmp/glpi_install.sh
-
-log "=============================================="
-log "✅ CT $CTID GLPI 11.0.4 - PHP 8.4 - 3 PERSISTÊNCIAS!"
-log "🌐 http://$(echo $IP | cut -d/ -f1)/"
-log "📂 Plugins: $PLUGINS_MP"
-log "📂 Marketplace: $MARKETPLACE_MP" 
-log "📂 Files: $FILES_MP"
-log "💾 Backups: /var/lib/vz/dump/glpi-backups-${CTID}"
-log "=============================================="
+echo "✅ CT criado, configurado com PT, timezone definido e atualizado!"
+pct status $CT_ID
