@@ -81,38 +81,37 @@ create_container() {
 configure_locale() {
     section "Configurando timezone e locale"
     pct exec "$CT_ID" -- bash -c "
-        timedatectl set-timezone '${TIMEZONE}'
-        apt update
-        apt install -y locales tzdata
-        sed -i 's/^# *${LOCALE}/${LOCALE}/' /etc/locale.gen
-        locale-gen '${LOCALE}'
-        update-locale LANG='${LOCALE}'
-    " || abort "Falha ao configurar locale."
+timedatectl set-timezone '${TIMEZONE}'
+apt update
+apt install -y locales tzdata
+sed -i 's/^# *${LOCALE}/${LOCALE}/' /etc/locale.gen
+locale-gen '${LOCALE}'
+update-locale LANG='${LOCALE}'
+" || abort "Falha ao configurar locale."
     log "Timezone e locale configurados."
 }
 
 update_system() {
     section "Atualizando sistema"
     pct exec "$CT_ID" -- bash -c "
-        apt update &&
-        apt full-upgrade -y &&
-        apt autoremove -y &&
-        apt clean
-    " || abort "Falha nos updates."
+apt update &&
+apt full-upgrade -y &&
+apt autoremove -y &&
+apt clean
+" || abort "Falha nos updates."
     log "Sistema atualizado."
 }
 
 install_mariadb() {
     section "Instalando MariaDB"
     pct exec "$CT_ID" -- bash -c "
-        apt update
-        apt install -y mariadb-server mariadb-client
-    " || abort "Falha ao instalar MariaDB."
+apt install -y mariadb-server mariadb-client
+" || abort "Falha ao instalar MariaDB."
 
     section "Configurando MariaDB"
     pct exec "$CT_ID" -- bash -c "
-        mysql -u root -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}'; FLUSH PRIVILEGES;\"
-        mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
+mysql -u root -e \"ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}'; FLUSH PRIVILEGES;\" 
+mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');
 DROP DATABASE IF EXISTS test;
@@ -120,76 +119,67 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
 
-        # Importar timezone
-        if command -v mysql_tzinfo_to_sql >/dev/null 2>&1; then
-            mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root -p\"${DB_ROOT_PASS}\" mysql
-        else
-            echo '[AVISO] mysql_tzinfo_to_sql não encontrado, ignorando importação de timezone.'
-        fi
-    " || abort "Falha na configuração de MariaDB."
+if command -v mysql_tzinfo_to_sql >/dev/null 2>&1; then
+    mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root -p\"${DB_ROOT_PASS}\" mysql
+else
+    echo '[AVISO] mysql_tzinfo_to_sql não encontrado, ignorando timezone.'
+fi
+" || abort "Falha na configuração de MariaDB."
     log "MariaDB instalado, seguro e timezone carregado."
 }
 
 create_glpi_db() {
     section "Criando banco GLPI"
     pct exec "$CT_ID" -- bash -c "
-        mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
+mysql -u root -p\"${DB_ROOT_PASS}\" <<EOF
 CREATE DATABASE glpidb;
 CREATE USER 'glpiuser'@'localhost' IDENTIFIED BY '${GLPI_DB_PASS}';
 GRANT ALL PRIVILEGES ON glpidb.* TO 'glpiuser'@'localhost';
 FLUSH PRIVILEGES;
 EOF
-    " || abort "Falha ao criar banco GLPI."
+" || abort "Falha ao criar banco GLPI."
     log "Banco GLPI criado."
 }
 
-install_apache_php() {
-    section "Instalando Apache + PHP 8.4"
+install_apache_php_glpi() {
+    section "Instalando Apache, PHP e GLPI (última versão via wget)"
+
     pct exec "$CT_ID" -- bash -c "
 apt update
 apt install -y apache2 php8.4 php8.4-fpm libapache2-mod-php8.4 \
 php8.4-mysql php8.4-curl php8.4-gd php8.4-intl php8.4-ldap \
 php8.4-xml php8.4-bz2 php8.4-zip php8.4-cli php8.4-mbstring php8.4-apcu \
-php8.4-imap php8.4-gmp php8.4-bcmath php8.4-xmlrpc
+php8.4-imap php8.4-gmp php8.4-bcmath php8.4-xmlrpc php8.4-opcache wget tar jq curl
 
-a2enmod proxy_fcgi setenvif rewrite
-a2enconf php8.4-fpm
+# Obter última versão GLPI
+LATEST_TAG=\$(wget -qO- https://api.github.com/repos/glpi-project/glpi/releases/latest | jq -r '.tag_name')
+echo '[INFO] Última versão do GLPI:' \$LATEST_TAG
 
-systemctl restart php8.4-fpm
-systemctl restart apache2
-" || abort "Falha ao instalar Apache/PHP."
-    log "Apache e PHP instalados e configurados."
-}
-
-install_glpi() {
-    section "Instalando GLPI"
-    pct exec "$CT_ID" -- bash -c "
+# Diretórios
 GLPI_PARENT_DIR='/var/www'
-GLPI_DIR='\$GLPI_PARENT_DIR/glpi'
+GLPI_DIR=\"\$GLPI_PARENT_DIR/glpi\"
+TMP_DIR=\"/tmp/glpi_extracted\"
 
-apt update
-apt install -y wget curl jq tar
+# Download e extração
+wget -O glpi-\$LATEST_TAG.tgz https://github.com/glpi-project/glpi/releases/download/\$LATEST_TAG/glpi-\$LATEST_TAG.tgz
+mkdir -p \$TMP_DIR
+tar -xzf glpi-\$LATEST_TAG.tgz -C \$TMP_DIR
+rm glpi-\$LATEST_TAG.tgz
 
-# Baixar última release do GitHub
-API_URL='https://api.github.com/repos/glpi-project/glpi/releases/latest'
-DOWNLOAD_URL=\$(curl -sL \$API_URL | jq -r .tarball_url)
-[ -z \"\$DOWNLOAD_URL\" ] && { echo 'Erro: não foi possível obter URL do GLPI'; exit 1; }
+# Obter o nome real da pasta extraída
+EXTRACTED_DIR=\$(ls \$TMP_DIR | head -n1)
 
-mkdir -p \$GLPI_PARENT_DIR
-wget -O /tmp/glpi-latest.tar.gz \$DOWNLOAD_URL
-tar -xzf /tmp/glpi-latest.tar.gz -C \$GLPI_PARENT_DIR
+# Remover antigo GLPI e mover novo
+rm -rf /var/www/glpi
+mv \"\$TMP_DIR/\$EXTRACTED_DIR\" /var/www/glpi
+rmdir \$TMP_DIR
 
-# Renomear diretório extraído para 'glpi'
-EXTRACTED_DIR=\$(ls -d \$GLPI_PARENT_DIR/*/ | head -1)
-mv \"\$EXTRACTED_DIR\" \"\$GLPI_DIR\" 2>/dev/null || true
-rm -f /tmp/glpi-latest.tar.gz
-
-# Permissões corretas
+# Permissões
 chown -R www-data:www-data \$GLPI_DIR
 find \$GLPI_DIR -type d -exec chmod 755 {} \;
 find \$GLPI_DIR -type f -exec chmod 644 {} \;
 
-# VirtualHost apontando para /public
+# Configuração Apache
 VHOST_CONF='/etc/apache2/sites-available/glpi.conf'
 cat <<EOF > \$VHOST_CONF
 <VirtualHost *:80>
@@ -214,24 +204,19 @@ EOF
 a2ensite glpi.conf
 a2dissite 000-default.conf
 a2enmod rewrite
+phpenmod apcu opcache
+" || abort "Falha na instalação de Apache/PHP/GLPI"
 
-systemctl restart php8.4-fpm
-systemctl restart apache2
-" || abort "Falha ao instalar GLPI."
-    log "GLPI instalado com sucesso com DocumentRoot /public."
+log "Apache, PHP e GLPI instalados (última versão)."
 }
 
-optimize_php_glpi() {
-    section "Otimização PHP para GLPI"
+restart_services() {
+    section "Reiniciando Apache e PHP"
     pct exec "$CT_ID" -- bash -c "
-apt update
-apt install -y php8.4-opcache php8.4-apcu
-phpenmod apcu opcache
-
 systemctl restart php8.4-fpm
 systemctl restart apache2
-" || abort "Falha na otimização PHP/GLPI."
-    log "PHP otimizado com APCu/Opcache ativados."
+" || abort "Falha ao reiniciar serviços"
+log "Serviços reiniciados com sucesso."
 }
 
 # ============================================================
@@ -242,9 +227,8 @@ configure_locale
 update_system
 install_mariadb
 create_glpi_db
-install_apache_php
-install_glpi
-optimize_php_glpi
+install_apache_php_glpi
+restart_services
 
 section "PROCESSO FINALIZADO"
 log "CT ${CT_ID} criado e configurado com sucesso!"
