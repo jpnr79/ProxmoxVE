@@ -251,16 +251,6 @@ phpenmod apcu opcache
 log "Apache, PHP e GLPI instalados (versão: ${GLPI_VERSION})."
 }
 
-
-a2ensite glpi.conf
-a2dissite 000-default.conf
-a2enmod rewrite
-phpenmod apcu opcache
-" || abort "Falha na instalação de Apache/PHP/GLPI"
-
-log "Apache, PHP e GLPI instalados (versão: ${GLPI_VERSION})."
-}
-
 restart_services() {
     section "Reiniciando Apache e PHP"
     pct exec "$CT_ID" -- bash -c "
